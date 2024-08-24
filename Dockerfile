@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --upgrade pip
+RUN pip install numpy==1.26.4
 RUN pip install ns3 gymnasium stable_baselines3[extra] opencv-python-headless
 
 RUN apt-get update && apt-get install -y ffmpeg libsm6 libxext6 
