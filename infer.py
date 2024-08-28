@@ -78,6 +78,8 @@ def main():
     quantum = 0
     target = 0
     limit = 0
+    def scale_action(action, low, high):
+        return low + (action + 1) * 0.5 * (high - low)
     try:
         
         for i in range(1):
@@ -101,6 +103,9 @@ def main():
 
             obs = [loss, throughput, _latency / 1000, quantum, target, limit]
             action, _states = model.predict(obs, deterministic=True)
+            action[0] = scale_action(action[0], 500, 9000)
+            action[1] = scale_action(action[1], 3, 1000)
+            action[2] = scale_action(action[2], 10000, 1000000)
             quantum = action[0]
             target = action[1]
             limit = action[2]

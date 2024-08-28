@@ -60,9 +60,9 @@ TraceN0Throughput(Time throughputInterval, Ptr<FqCoDelQueueDisc> a, double* thro
     uint32_t total_sent = a->GetStats().nTotalSentBytes;
     uint32_t total_loss = a->GetStats().nTotalDroppedBytes;
     uint32_t _loss = total_loss - *g_n0BytesLoss;
-    *_loss_ratio = static_cast<double>(_loss * 8) / (throughputInterval.GetSeconds() / 1e6); 
+    *_loss_ratio = static_cast<double>(_loss * 8) / throughputInterval.GetSeconds() / 1e6; 
     uint32_t _sent = total_sent - *g_n0BytesSent;
-    *throughput = static_cast<double>(_sent * 8) / (throughputInterval.GetSeconds() / 1e6);
+    *throughput = static_cast<double>(_sent * 8) / throughputInterval.GetSeconds() / 1e6;
     Time _now = Simulator::Now();
     *g_n0BytesSent = total_sent;
     *g_n0BytesLoss = total_loss;

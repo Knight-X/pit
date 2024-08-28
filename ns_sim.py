@@ -19,9 +19,8 @@ class SimpleNs(gym.Env):
         self.max_steps = 10 
         self.cur_steps = 0
         self.action_space = Box(low=-1, high=1, shape=(3,), dtype=np.float32)
-        self.observation_space = Box(
-            0.0, self.max_steps, shape=(
-                6,), dtype=np.float32)
+        self.observation_space = Box(low = np.array([10, 10, 60, 500, 3, 10000]), high = np.array([101, 101, 85, 9000, 1000, 1000000]), 
+                 dtype=np.float32)
         _count = random.random() % 250
         self._moden = tc.ns_sim(_count)
         self._prev_reset = None
@@ -85,7 +84,7 @@ class SimpleNs(gym.Env):
 
 
         _loss_ratio = obs[0]
-        _throughput = obs[1] / 100000000000000
+        _throughput = obs[1] * 0.01
         _rtt = obs[2]
         _bottle_rate = obs[3] * 0.01
         _base_rtt = obs[4] * 0.001
@@ -118,9 +117,9 @@ class SimpleNs(gym.Env):
           Actions:
             action_1: {action[0]:6.3f} | action_2: {action[1]:6.3f} | action_3: {action[2]:6.3f}
           Network Metrics:
-            Throughput: {_throughput:9.2f} | Loss Ratio: {_loss_ratio:7.4f}
-            Rtt:        {_rtt: 9.2f} | Base RTT: {_base_rtt:7.2f}
-            Bottle rate: {_bottle_rate:9.2f}
+            Throughput: {obs[1]:9.4f} Mbps | Loss Ratio: {obs[0]:7.4f}
+            Rtt:        {obs[2]: 9.4f} seconds | Base RTT: {_base_rtt:7.4f} seconds
+            Bottle rate: {obs[3]:9.4f} Mpbs
           Reward:
             {reward: 7.2f}""")
         return (
