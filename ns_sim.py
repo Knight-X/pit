@@ -19,29 +19,20 @@ class SimpleNs(gym.Env):
         self.max_steps = 10 
         self.cur_steps = 0
         self.action_space = Box(low=-1, high=1, shape=(3,), dtype=np.float32)
-        self.observation_space = Box(low = np.array([10, 10, 60, 500, 3, 10000]), high = np.array([101, 101, 85, 9000, 1000, 1000000]), 
+        self.observation_space = Box(low = np.array([10, 10, 60, 500, 3, 10000]), high = np.array([101, 101, 2000, 9000, 1000, 1000000]), 
                  dtype=np.float32)
-        _count = random.random() % 250
+        _count = random.randint(1, 255)
         self._moden = tc.ns_sim(_count)
         self._prev_reset = None
         self.noise = NormalActionNoise(mean=np.zeros(self.action_space.shape), sigma=0.1 * np.ones(self.action_space.shape))
         
 
     def reset(self, *, seed=None, options=None):
-        if seed == None:
-            seed = 5
-        self.seed = seed
-        random.seed(seed)
+        _rand = random.randint(1, 255)
         self.cur_steps = 1.0
-        _obs = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-        self._moden.reset(self.seed)
-        if self._prev_reset != None:
-            _obs = self._prev_reset
-            self._prev_reset = None
+        self._moden.reset(_rand)
+        _obs = self.np_random.uniform(low=[10, 10, 60, 0, 0, 0], high=[101, 101, 2000, 0, 0, 0], size=(6,))
 
-        _obs[0] = random.random()
-        _obs[1] = random.random()
-        _obs[2] = random.random()
         # Return obs and (empty) info dict.
         return np.array(_obs, np.float32), {"env_state": "reset"}
 
@@ -54,11 +45,6 @@ class SimpleNs(gym.Env):
         infos = {}
 
         #action normalize
-        old_min = -1
-        old_max = 1
-        range_1 = 9000 - 500
-        range_2 = 1000 - 3
-        range_3 = 1000000 - 10000
         action[0] = scale_action(action[0], 500, 9000)
         action[1] = scale_action(action[1], 3, 1000)
         action[2] = scale_action(action[2], 10000, 1000000)
@@ -84,13 +70,13 @@ class SimpleNs(gym.Env):
 
 
         _loss_ratio = obs[0]
-        _throughput = obs[1] * 0.01
+        _throughput = obs[1] 
         _rtt = obs[2]
-        _bottle_rate = obs[3] * 0.01
+        _bottle_rate = obs[3] 
         _base_rtt = obs[4] * 0.001
         terminated = self.cur_steps >= self.max_steps
         self.cur_steps += 1
-        _obs = [obs[0], obs[1], obs[2], action[0], action[1], action[2]]
+        _obs = [obs[0], obs[1], obs[2] * 1000, action[0], action[1], action[2]]
         if terminated == True:
             self._prev_reset = _obs
 

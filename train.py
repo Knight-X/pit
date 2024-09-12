@@ -37,7 +37,6 @@ def make_env(env_id: str, rank: int, seed: int = 0):
 
     def _init():
         env = ns_sim.SimpleNs()
-        env.reset(seed=seed + rank)
         time.sleep(2)
         return env
     set_random_seed(seed)
