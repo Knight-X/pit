@@ -14,19 +14,20 @@ ns.cppyy.cppdef(
 #include "ns3/traffic-control-module.h"
 #include <iomanip>
 #include <string>
+#include <math.h>
 
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("FqCoDelSimulation");
 
 
-void
-TraceN0Rtt(std::vector<double> *rtt_vec, Time oldRtt, Time newRtt)
-{
-    double rtt_n0 = newRtt.GetSeconds();
-    (*rtt_vec).push_back(rtt_n0);
-}
 
+void
+TraceNRtt(std::vector<double> *rtt_vec, Time oldRtt, Time newRtt)
+{
+    double rtt_n1 = newRtt.GetSeconds();
+    (*rtt_vec).push_back(rtt_n1);
+}
 
 void
 TracePingRtt(double* rtt_ping, uint16_t seqNo, Time rtt)
@@ -50,10 +51,11 @@ double avg_rtt(std::vector<double>* rtt_vec) {
 }
 
 void
-TraceN0Throughput(Time throughputInterval, Ptr<FqCoDelQueueDisc> a, double* throughput, double *_loss_ratio, uint32_t *g_n0BytesSent, uint32_t *g_n0BytesLoss)
+TraceN0Throughput(Time throughputInterval, Ptr<FqCoDelQueueDisc> a, double* throughput, double *_loss_ratio, uint32_t *g_n0BytesSent, uint32_t *g_n0BytesLoss, uint32_t *g_n0BytesBack)
 {
     uint32_t total_sent = a->GetStats().nTotalSentBytes;
     uint32_t total_loss = a->GetStats().nTotalDroppedBytes;
+    uint32_t _backlog = a->GetNPackets();
     uint32_t _loss = total_loss - *g_n0BytesLoss;
     *_loss_ratio = static_cast<double>(_loss * 8) / throughputInterval.GetSeconds() / 1e6; 
     uint32_t _sent = total_sent - *g_n0BytesSent;
@@ -61,17 +63,19 @@ TraceN0Throughput(Time throughputInterval, Ptr<FqCoDelQueueDisc> a, double* thro
     Time _now = Simulator::Now();
     *g_n0BytesSent = total_sent;
     *g_n0BytesLoss = total_loss;
-    Simulator::Schedule(throughputInterval, &TraceN0Throughput, throughputInterval, a, throughput, _loss_ratio, g_n0BytesSent, g_n0BytesLoss);
+    *g_n0BytesBack = _backlog;
+    Simulator::Schedule(throughputInterval, &TraceN0Throughput, throughputInterval, a, throughput, _loss_ratio, g_n0BytesSent, g_n0BytesLoss, g_n0BytesBack);
 }
-
 
 
 void
-ScheduleN0TcpRttTraceConnection(std::vector<double>* rtt_vec)
+ScheduleNTcpRttTraceConnection(std::vector<double>* rtt_vec, int _index)
 {
-    Config::ConnectWithoutContext("/NodeList/0/$ns3::TcpL4Protocol/SocketList/0/RTT",
-                                  MakeBoundCallback(&TraceN0Rtt, rtt_vec));
+    std::string result = "/NodeList/" + std::to_string(_index) + "/$ns3::TcpL4Protocol/SocketList/0/RTT";
+    Config::ConnectWithoutContext(result,
+                                  MakeBoundCallback(&TraceNRtt, rtt_vec));
 }
+
 
 int fluctuate(int value, int percentage = 5) {
   static std::mt19937 gen(std::time(0));
@@ -94,17 +98,21 @@ class NetworkModel {
     void configureConnection();
     void configureInternetStack();
     void setupAddress();
-    void setupApplications();
+    void setupApplications(Ptr<Node> server, Ptr<Node> client, Ipv4Address _client_addr, uint16_t nPort, Time _star, Time _stop);
     void setupTraces();
 
 
-    Ptr<Node> n0Server, n2, n3, n4Client;
-    NetDeviceContainer n0ServerDevices, n2n3Devices, n4ClientDevices;
-    Ipv4InterfaceContainer n0ServerIfaces, n2n3Ifaces, n4ClientIfaces;
+    Ptr<Node> n2, n3;
+    std::vector<Ptr<Node>> nServer;
+    std::vector<Ptr<Node>> nClient;
+    NetDeviceContainer n2n3Devices;
+    std::vector<NetDeviceContainer> nServerDevices;
+    std::vector<NetDeviceContainer> nClientDevices;
+    Ipv4InterfaceContainer n2n3Ifaces;
+    std::vector<Ipv4InterfaceContainer> nServerIfaces;
+    std::vector<Ipv4InterfaceContainer> nClientIfaces;
     Ptr<TrafficControlLayer> tc;
     Ptr<FqCoDelQueueDisc> fqCoDel;
-    ApplicationContainer n0App;
-    ApplicationContainer n4SinkApp;
     ApplicationContainer apps;
     int ip_id;
     double throughput;
@@ -112,10 +120,17 @@ class NetworkModel {
     double rtt_ping;
     uint32_t g_n0BytesLoss;
     uint32_t g_n0BytesSent;
+    uint32_t g_n0BytesBack;
     int _bottle_rate;
     int base_rtt;
+    int base_rtt_n1;
     double link_data_rate; 
     std::vector<double> rtt_vec;
+    std::vector<double> rtt_vec_n1;
+    std::vector<double> rtt_vec_n2;
+    int n_servers;
+    int n_clients;
+    int _client_index;
 
 
 };
@@ -145,10 +160,14 @@ void NetworkModel::init(int process_id) {
     _loss_ratio = 0.0;
     g_n0BytesLoss = 0;
     g_n0BytesSent = 0;
+    g_n0BytesBack = 0;
+    n_servers = 5;
+    n_clients = 2;
 
 
     std::uniform_int_distribution<> rtt_dis(60, 85);
     base_rtt = rtt_dis(gen);
+    base_rtt_n1 = rtt_dis(gen);
 
     std::uniform_int_distribution<> rate_dis(10, 101);
     _bottle_rate = rate_dis(gen);
@@ -157,6 +176,7 @@ void NetworkModel::init(int process_id) {
               << "loss: " << std::right << std::setw(8) << std::fixed << std::setprecision(3) << _loss_ratio
               << " | bottle rate: "  << std::setw(8) << std::fixed << std::setprecision(2) << _bottle_rate 
               << " | rtt: " << std::setw(8) << std::fixed << std::setprecision(2) << base_rtt 
+              << " | rtt: " << std::setw(8) << std::fixed << std::setprecision(2) << base_rtt_n1
               << std::endl;
 
     std::uniform_real_distribution<> linkdata_dis(0.9, 1.1);
@@ -187,10 +207,21 @@ void NetworkModel::init(int process_id) {
     ////////////////////////////////////////////////////////////
     // scenario setup                                         //
     ////////////////////////////////////////////////////////////
-    n0Server = CreateObject<Node>();
+    
+    ///creating server nodes
+    for (int i = 0; i < n_servers; i++) {
+      Ptr<Node> _server = CreateObject<Node>();
+      nServer.push_back(_server);
+    }
     n2 = CreateObject<Node>();
     n3 = CreateObject<Node>();
-    n4Client = CreateObject<Node>();
+
+    ///creating client nodes
+    for (int i = 0; i < n_clients; i++) {
+      Ptr<Node> _client =  CreateObject<Node>();
+      nClient.push_back(_client);
+    }
+
     MobilityHelper mobility;
 
     //make the position of the router randomly
@@ -216,25 +247,57 @@ void NetworkModel::init(int process_id) {
                               StringValue("ns3::ConstantRandomVariable[Constant=1.0]"),
                               "Bounds",
                               RectangleValue(Rectangle(0.0, 20.0, 0.0, 20.0)));
-    mobility.Install(n4Client);
+    mobility.Install(nClient[0]);
 
     AsciiTraceHelper ascii;
     MobilityHelper::EnableAsciiAll(ascii.CreateFileStream("mobility-trace-example.mob"));
 
+    Time _now = Simulator::Now();
+    Time _start = _now;
+    Time stopTime = _now + Seconds(60);
+
+    std::cout << "connection" << std::endl;
     configureConnection();
+
+    std::cout << "internet stack" << std::endl;
     configureInternetStack();
+
+    std::cout << "set up ip address" << std::endl;
     setupAddress();
-    setupApplications();
+    std::uniform_int_distribution<> client_dis(1, 100);
+
+    for (int i = 0; i < n_servers; i++) {
+      uint16_t nPort = 5000;
+      _client_index = i;
+      if (i >= 2) {
+        _client_index = client_dis(gen) % 2;
+      }
+      std::cout << "client:" << _client_index << "server: " << i << " " <<  nClientIfaces[_client_index].GetAddress(1) << std::endl;
+      setupApplications(nServer[i], nClient[_client_index], nClientIfaces[_client_index].GetAddress(1), nPort + i, _start, stopTime);
+    }
+
+    std::cout << "ping" << std::endl;
+    addPing(n3, _start, stopTime);
+
+    std::cout << "traces" << std::endl;
     setupTraces();
+
+    std::cout << "finish" << std::endl;
+
 
 }
 
 void NetworkModel::configureConnection() { 
     Time baseRtt = MilliSeconds(base_rtt);
+    Time baseRtt_n1 = MilliSeconds(base_rtt_n1);
     Time oneWayDelay = baseRtt / 2;
+    Time oneWayDelay_n1 = baseRtt_n1 / 2;
     std::string bottle_rate = std::to_string(_bottle_rate) + "Mbps";
     DataRate bottleneckRate(bottle_rate);
     std::string linkDataRate = std::to_string(link_data_rate) + "Gbps";
+    std::vector<Time> _one_way_delay;
+    _one_way_delay.push_back(oneWayDelay);
+    _one_way_delay.push_back(oneWayDelay_n1);
 
 
     //set up the channel and device attribute among devices
@@ -242,12 +305,20 @@ void NetworkModel::configureConnection() {
     p2p.SetQueue("ns3::DropTailQueue", "MaxSize", QueueSizeValue(QueueSize("3p")));
     p2p.SetDeviceAttribute("DataRate", DataRateValue(DataRate(linkDataRate)));
     p2p.SetChannelAttribute("Delay", TimeValue(MicroSeconds(1)));
-    n0ServerDevices = p2p.Install(n2, n0Server);
+    for (int i = 0; i < n_servers; i++) {
+       
+      NetDeviceContainer _ServerDevices = p2p.Install(n2, nServer[i]);
+      nServerDevices.push_back(_ServerDevices);
+    }
 
     p2p.SetChannelAttribute("Delay", TimeValue(MicroSeconds(1)));
     n2n3Devices = p2p.Install(n2, n3);
-    p2p.SetChannelAttribute("Delay", TimeValue(oneWayDelay));
-    n4ClientDevices = p2p.Install(n3, n4Client);
+
+    for (int i = 0; i < n_clients; i++) {
+      p2p.SetChannelAttribute("Delay", TimeValue(_one_way_delay[i]));
+      NetDeviceContainer _nClientDevices = p2p.Install(n3, nClient[i]);
+      nClientDevices.push_back(_nClientDevices);
+    }
     Ptr<PointToPointNetDevice> p = n2n3Devices.Get(0)->GetObject<PointToPointNetDevice>();
     p->SetAttribute("DataRate", DataRateValue(bottleneckRate));
 
@@ -262,18 +333,28 @@ void NetworkModel::configureInternetStack() {
 
     // Set the per-node TCP type here
     Ptr<TcpL4Protocol> proto;
-    proto = n4Client->GetObject<TcpL4Protocol>();
-    proto->SetAttribute("SocketType", TypeIdValue(n0TcpTypeId));
-    proto = n0Server->GetObject<TcpL4Protocol>();
-    proto->SetAttribute("SocketType", TypeIdValue(n0TcpTypeId));
+    for (int i = 0; i < n_servers; i++) {
+       
+      proto = nServer[i]->GetObject<TcpL4Protocol>();
+      proto->SetAttribute("SocketType", TypeIdValue(n0TcpTypeId));
+    }
+    for (int i = 0; i < n_clients; i++) {
+       
+      proto = nClient[i]->GetObject<TcpL4Protocol>();
+      proto->SetAttribute("SocketType", TypeIdValue(n0TcpTypeId));
+    }
 
     // Configure queue qdisc
     TrafficControlHelper tchFq;
     tchFq.SetRootQueueDisc("ns3::FqCoDelQueueDisc");
     tchFq.SetQueueLimits("ns3::DynamicQueueLimits", "HoldTime", StringValue("1ms"));
-    tchFq.Install(n0ServerDevices);
+    for (int i = 0; i < n_servers; i++) {
+      tchFq.Install(nServerDevices[i]);
+    }
+    for (int i = 0; i < n_clients; i++) {
+      tchFq.Install(nClientDevices[i]);
+    }
     tchFq.Install(n2n3Devices.Get(1)); // n2 queue for bottleneck link
-    tchFq.Install(n4ClientDevices);
 
     TrafficControlHelper tchN2;
     tchN2.SetRootQueueDisc(queueTypeId.GetName());
@@ -284,43 +365,54 @@ void NetworkModel::configureInternetStack() {
 
 void NetworkModel::setupAddress() {
     Ipv4AddressHelper ipv4;
-    ipv4.SetBase("10.10.13.0", "255.255.255.0");
-    n0ServerIfaces = ipv4.Assign(n0ServerDevices);
+    for (int i = 0; i < n_servers; i++) { 
+      int _id = i + 10;
+      std::string _net = "10.10." + std::to_string(_id) + ".0";
+      ipv4.SetBase(_net.c_str(), "255.255.255.0");
+      Ipv4InterfaceContainer _ServerIfaces = ipv4.Assign(nServerDevices[i]);
+      nServerIfaces.push_back(_ServerIfaces);
+    }
+
     ipv4.SetBase("172.16.10.0", "255.255.255.0");
     n2n3Ifaces = ipv4.Assign(n2n3Devices);
-    ipv4.SetBase("192.168.1.0", "255.255.255.0");
-    n4ClientIfaces = ipv4.Assign(n4ClientDevices);
+
+    for (int i = 0; i < n_clients; i++) { 
+      int _id = i + 10;
+      std::string _net = "192.168." + std::to_string(_id) + ".0";
+      ipv4.SetBase(_net.c_str(), "255.255.255.0");
+      Ipv4InterfaceContainer _ClientIfaces = ipv4.Assign(nClientDevices[i]);
+      nClientIfaces.push_back(_ClientIfaces);
+    }
 
     Ipv4GlobalRoutingHelper::PopulateRoutingTables();
 }
 
-void NetworkModel::setupApplications() {
-    int _max_bytes_val = ip_id * 100000000;
+void NetworkModel::setupApplications(Ptr<Node> server, Ptr<Node> client, Ipv4Address _client_addr, uint16_t nPort, Time _start, Time _stop) {
+    std::random_device rd; 
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<> data_dis(60, 85);
+    int max_bytes_val = data_dis(gen) * 100000000;
     BulkSendHelper tcp("ns3::TcpSocketFactory", Address());
 
     // set to large value:  e.g. 1000 Mb/s for 60 seconds = 7500000000 bytes
-    tcp.SetAttribute("MaxBytes", UintegerValue(_max_bytes_val));
+    tcp.SetAttribute("MaxBytes", UintegerValue(max_bytes_val));
 
     // Configure n4/n0 TCP client/server pair
-    uint16_t n4Port = 5000;
-    InetSocketAddress n0DestAddress(n4ClientIfaces.GetAddress(1), n4Port);
+    InetSocketAddress n0DestAddress(_client_addr, nPort);
     tcp.SetAttribute("Remote", AddressValue(n0DestAddress));
-    n0App = tcp.Install(n0Server);
+    ApplicationContainer nApp = tcp.Install(server);
 
-    Address n4SinkAddress(InetSocketAddress(Ipv4Address::GetAny(), n4Port));
+    Address n4SinkAddress(InetSocketAddress(Ipv4Address::GetAny(), nPort));
     PacketSinkHelper n4SinkHelper("ns3::TcpSocketFactory", n4SinkAddress);
-    n4SinkApp = n4SinkHelper.Install(n4Client);
+    ApplicationContainer nSinkApp = n4SinkHelper.Install(client);
 
 
-    Time _now = Simulator::Now();
-    Time _start = _now;
-    Time stopTime = _now + Seconds(60);
-    n0App.Start(_start);
-    n0App.Stop(stopTime - Seconds(1));
-    n4SinkApp.Start(_start);
-    n4SinkApp.Stop(stopTime - MilliSeconds(500));
+    nApp.Start(_start);
+    nApp.Stop(_stop - Seconds(1));
+    nSinkApp.Start(_start);
+    nSinkApp.Stop(_stop - MilliSeconds(500));
 
-    addPing(n3, _start, stopTime);
+
 }
 
 void NetworkModel::setupTraces() {
@@ -332,12 +424,18 @@ void NetworkModel::setupTraces() {
     Time throughputSamplingInterval = MilliSeconds(200);
     Time marksSamplingInterval = MilliSeconds(100);
     Simulator::Schedule(MilliSeconds(100),
-                        &ScheduleN0TcpRttTraceConnection,
-                        &rtt_vec);
+                        &ScheduleNTcpRttTraceConnection,
+                        &rtt_vec, 0);
+    Simulator::Schedule(MilliSeconds(100),
+                        &ScheduleNTcpRttTraceConnection,
+                        &rtt_vec_n1, 1);
+    Simulator::Schedule(MilliSeconds(100),
+                        &ScheduleNTcpRttTraceConnection,
+                        &rtt_vec_n2, 2);
     Simulator::Schedule(throughputSamplingInterval,
                         &TraceN0Throughput,
                         throughputSamplingInterval,
-			fqCoDel, &throughput, &_loss_ratio, &g_n0BytesSent, &g_n0BytesLoss);
+			fqCoDel, &throughput, &_loss_ratio, &g_n0BytesSent, &g_n0BytesLoss, &g_n0BytesBack);
 
 }
 
@@ -351,24 +449,49 @@ std::vector<double> NetworkModel::step(int _quantum, int _target, int _maxsize) 
     Simulator::Stop(Seconds(5));
    	Simulator::Run();
     double rtt_n0 = avg_rtt(&rtt_vec);
+    double rtt_n1 = avg_rtt(&rtt_vec_n1);
+    double rtt_n2 = avg_rtt(&rtt_vec_n2);
+   
+    if (_client_index == 0) {
+      rtt_n0 = (rtt_n0 + rtt_n2) / 2;
+    } else {
+      rtt_n1 = (rtt_n1 + rtt_n2) / 2;
+    }
     std::vector<double> ret;
     ret.push_back(_loss_ratio); 
     ret.push_back(throughput);
     ret.push_back(rtt_n0);
+    ret.push_back(rtt_n1);
+    ret.push_back(g_n0BytesBack);
     ret.push_back(_bottle_rate);
     ret.push_back(base_rtt);
+    ret.push_back(base_rtt_n1);
+    ret.push_back(_client_index);
     std::cout << std::setw(15) << std::left << "Step: " 
               << std::setw(10) << std::right <<  ip_id 
               << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << _loss_ratio 
               << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << throughput 
               << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << rtt_n0
               << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << rtt_ping
+              << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << rtt_n1
+              << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << rtt_n2
+              << std::setw(10) << std::right << std::fixed << std::setprecision(3)  << _client_index
+              << std::setw(13) << std::right << std::fixed << std::setprecision(6)  << g_n0BytesBack
               << std::endl;
     rtt_vec.clear();
+    rtt_vec_n1.clear();
+    rtt_vec_n2.clear();
     return ret;
 }
 
 void NetworkModel::finish() {
+    nClient.clear();
+    nServer.clear();
+    nServerDevices.clear();
+    nClientDevices.clear();
+    nServerIfaces.clear();
+    nClientIfaces.clear();
+
     Simulator::Destroy();
 
 }

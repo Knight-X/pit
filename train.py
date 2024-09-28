@@ -28,8 +28,9 @@ class Forced(BaseCallback):
         if self.n_calls % self.check_freq == 0:
             mean_rewards = [np.mean(env_rewards) for env_rewards in self.rewards]
             overall_mean_reward = np.mean(mean_rewards)
-            self.logger.record("rollout/mean_reward", overall_mean_reward)
-            self.logger.dump(self.n_calls)
+            if self.n_calls > 32:
+                self.logger.record("rollout/mean_reward", overall_mean_reward)
+                self.logger.dump(self.n_calls)
             self.rewards = [[] for _ in range(self.training_env.num_envs)]
         return True
 
@@ -49,7 +50,7 @@ if __name__ == "__main__":
     model = PPO("MlpPolicy",  _vec_env, n_steps=64, verbose =1, tensorboard_log="./sb35/")
     checkpoint_callback = Forced(check_freq=32, log_dir="./sb35/")
 
-    model.learn(total_timesteps=180000, log_interval=1, callback=checkpoint_callback)
+    model.learn(total_timesteps=300000, log_interval=1, callback=checkpoint_callback)
     model.save("ppo_stand")
 
 

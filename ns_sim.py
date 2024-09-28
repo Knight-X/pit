@@ -19,7 +19,7 @@ class SimpleNs(gym.Env):
         self.max_steps = 10 
         self.cur_steps = 0
         self.action_space = Box(low=-1, high=1, shape=(3,), dtype=np.float32)
-        self.observation_space = Box(low = np.array([10, 10, 60, 500, 3, 10000]), high = np.array([101, 101, 2000, 9000, 1000, 1000000]), 
+        self.observation_space = Box(low = np.array([10, 10, 0,  500, 3, 10000]), high = np.array([101, 101, 1000000, 9000, 1000, 1000000]), 
                  dtype=np.float32)
         _count = random.randint(1, 255)
         self._moden = tc.ns_sim(_count)
@@ -31,7 +31,7 @@ class SimpleNs(gym.Env):
         _rand = random.randint(1, 255)
         self.cur_steps = 1.0
         self._moden.reset(_rand)
-        _obs = self.np_random.uniform(low=[10, 10, 60, 0, 0, 0], high=[101, 101, 2000, 0, 0, 0], size=(6,))
+        _obs = self.np_random.uniform(low=[10, 10, 0, 0, 0, 0], high=[101, 101, 1000000, 0, 0, 0], size=(6,))
 
         # Return obs and (empty) info dict.
         return np.array(_obs, np.float32), {"env_state": "reset"}
@@ -72,11 +72,15 @@ class SimpleNs(gym.Env):
         _loss_ratio = obs[0]
         _throughput = obs[1] 
         _rtt = obs[2]
-        _bottle_rate = obs[3] 
-        _base_rtt = obs[4] * 0.001
+        _rtt_n1 = obs[3]
+        _backlog = obs[4]
+        _bottle_rate = obs[5] 
+        _base_rtt = obs[6] * 0.001
+        _base_rtt_n1 = obs[7] * 0.001
+        _client_index = obs[8]
         terminated = self.cur_steps >= self.max_steps
         self.cur_steps += 1
-        _obs = [obs[0], obs[1], obs[2] * 1000, action[0], action[1], action[2]]
+        _obs = [obs[0], obs[1], obs[4], action[0], action[1], action[2]]
         if terminated == True:
             self._prev_reset = _obs
 
@@ -93,10 +97,19 @@ class SimpleNs(gym.Env):
         if _base_rtt != _rtt:
             basertt_reward = 1.0 / abs(_base_rtt - _rtt)
 
+        basertt_reward_n1 = 10000.0
+        if _base_rtt_n1 != _rtt_n1:
+            basertt_reward_n1 = 1.0 / abs(_base_rtt_n1 - _rtt_n1)
+
         b_rate_reward = 10000.0
         if _bottle_rate != _throughput:
             b_rate_reward = 1.0 / abs(_bottle_rate - _throughput)
-        reward = basertt_reward * 5.0 - _loss_ratio #+ exploration_bonus #+ b_rate_reward * 5.0 -  _loss_ratio + exploration_bonus
+
+        backlog_reward = 10000.0
+        if obs[4] != 0.0:
+            backlog_reward = 1.0 / (obs[4] / 1000000.0)
+            backlog_reward = backlog_reward / 100.0
+        reward = backlog_reward * 5.0 + _loss_ratio #+ exploration_bonus #+ b_rate_reward * 5.0 -  _loss_ratio + exploration_bonus
         print(f"""
           Step Info:
             Step: {self.cur_steps:5f} | Terminated: {str(terminated):5s}
@@ -104,8 +117,9 @@ class SimpleNs(gym.Env):
             action_1: {action[0]:6.3f} | action_2: {action[1]:6.3f} | action_3: {action[2]:6.3f}
           Network Metrics:
             Throughput: {obs[1]:9.4f} Mbps | Loss Ratio: {obs[0]:7.4f}
-            Rtt:        {obs[2]: 9.4f} seconds | Base RTT: {_base_rtt:7.4f} seconds
-            Bottle rate: {obs[3]:9.4f} Mpbs
+            Rtt:        {obs[2]: 9.4f} seconds | Rtt n1:    {obs[3]: 9.4f}  client index: {_client_index} | Base RTT: {_base_rtt:7.4f} seconds | Base RTT N1: {_base_rtt_n1: 7.4f} seconds 
+            Bottle rate: {obs[5]:9.4f} Mpbs
+            Backlog: {obs[4]: 9.4f} p
           Reward:
             {reward: 7.2f}""")
         return (
